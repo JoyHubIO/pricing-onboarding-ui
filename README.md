@@ -13,7 +13,7 @@ npm run build      # type-check and bundle to dist/
 ```
 
 Every push to `main` is built and published by `.github/workflows/pages.yml` to
-https://joyhubio.github.io/Pricing-Onboarding-Demo-UI/ (GitHub Pages, source "GitHub Actions").
+https://joyhubio.github.io/pricing-onboarding-ui/ (GitHub Pages, source "GitHub Actions").
 
 ## Walking every route
 
