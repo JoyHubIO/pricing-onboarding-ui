@@ -12,7 +12,7 @@ npm test           # vitest: model, flow, upload parser, screens
 npm run build      # type-check and bundle to dist/
 ```
 
-Every push to this branch is built and published by `.github/workflows/pages.yml` to
+Every push to `main` is built and published by `.github/workflows/pages.yml` to
 https://joyhubio.github.io/Pricing-Onboarding-Demo-UI/ (GitHub Pages, source "GitHub Actions").
 
 ## Walking every route

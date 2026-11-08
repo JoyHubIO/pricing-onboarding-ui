@@ -1,11 +1,11 @@
 # Builds the pricing page and publishes dist/ to GitHub Pages, at
-# https://<owner>.github.io/<repo>/ . Deploys from the ticket branch named below;
-# change `branches` when the next ticket's branch should be the one on show.
+# https://<owner>.github.io/<repo>/ . Deploys from main: merge the ticket branch
+# that should be on show into main.
 name: Pages
 
 on:
   push:
-    branches: [wip/t1-pricing-page]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
