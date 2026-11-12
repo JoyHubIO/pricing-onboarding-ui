@@ -248,6 +248,9 @@ h1.title.big { font-size: 52px; }
 }
 .route-case:hover { border-color: #162850; }
 .route-case.active { border-color: #162850; box-shadow: inset 3px 0 0 #00f5e4; }
+.route-case:disabled { cursor: not-allowed; border-style: dashed; background: #f1f3f8; }
+.route-case:disabled:hover { border-color: #d4dae8; }
+.route-case:disabled .route-case-top { opacity: 0.45; }
 .route-case-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .route-case-codes { display: flex; gap: 4px; flex-shrink: 0; }
 .route-case-codes .code { width: 34px; font-size: 11px; padding: 3px 0; }
