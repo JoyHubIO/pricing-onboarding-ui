@@ -30,7 +30,13 @@ jobs:
       - run: npx tsc -b
       - run: npm test
       # Pages serves a project site under /<repo>/, so assets are referenced from there.
+      # The pricing API the published page reads. Set the repository variable
+      # PRICING_API_URL; that API must list this site's origin in
+      # pricingAllowedOrigins. Unset, the page says it cannot load pricing.
       - run: npx vite build --base "/${{ github.event.repository.name }}/"
+        env:
+          VITE_SCALA_API_URL: ${{ vars.PRICING_API_URL }}
+          VITE_TEST_ROUTES: ${{ vars.PRICING_TEST_ROUTES }}
       - uses: actions/configure-pages@v5
         with:
           enablement: true

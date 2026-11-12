@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import App from '../App'
 import { INSTALL_NOTICE, PREVIEW_NOTE, REFUND_TERMS } from '../data'
+import { MGRS } from '../test/fixtures/managers'
 
 beforeAll(() => {
   window.scrollTo = () => {}
@@ -19,9 +20,17 @@ const type = (label: string | RegExp, value: string) =>
   fireEvent.change(screen.getByLabelText(typeof label === 'string' ? new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) : label), { target: { value } })
 const next = () => click(/^Continue$/)
 
+const loadManagers = async () => MGRS
+/** The page once its manager list has loaded. */
+async function show() {
+  render(<App loadManagers={loadManagers} tools />)
+  // The panel's recipes also say "Owner", so the first screen's button is looked for on the stage.
+  await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+}
+
 /** Owner, self-managed, company typed, on the properties screen. */
-function toProperties(company: string) {
-  render(<App />)
+async function toProperties(company: string) {
+  await show()
   click(/Owner/)
   click(/We self-manage/)
   type(/^Company$/, company)
@@ -44,8 +53,8 @@ function who(email: string) {
 }
 
 describe('the page', () => {
-  it('R1 to a price; the email errors keep Continue clickable; two checkout options at $1,000', () => {
-    toProperties('Bozzuto')
+  it('R1 to a price; the email errors keep Continue clickable; two checkout options at $1,000', async () => {
+    await toProperties('Bozzuto')
     expect(screen.getByRole('heading').textContent).toMatch(/on Yardi/)
     expect(screen.queryByText(INSTALL_NOTICE)).toBeNull()
     counts(20, 2000)
@@ -72,8 +81,8 @@ describe('the page', () => {
     expect(screen.getByText(new RegExp(REFUND_TERMS.slice(0, 30)))).toBeTruthy()
   })
 
-  it('three checkout options at $1,050, and the notice on an R2 administrator screen', () => {
-    toProperties('Acme Holdings')
+  it('three checkout options at $1,050, and the notice on an R2 administrator screen', async () => {
+    await toProperties('Acme Holdings')
     expect(screen.getByRole('heading').textContent).toMatch(/How many property management systems/)
     click(/^1$/)
     click(/^Yardi$/)
@@ -93,8 +102,8 @@ describe('the page', () => {
     expect(within(routes).getByText(/sam@acme-holdings.com/)).toBeTruthy()
   })
 
-  it('company suggestions appear from five characters and a pick fills the website', () => {
-    render(<App />)
+  it('company suggestions appear from five characters and a pick fills the website', async () => {
+    await show()
     click(/Owner/)
     click(/A third-party manager/)
     type(/Management company/, 'Grey')
@@ -107,8 +116,8 @@ describe('the page', () => {
     expect(screen.getByText(INSTALL_NOTICE)).toBeTruthy()
   })
 
-  it('the test routes panel loads a case and hides on request', () => {
-    render(<App />)
+  it('the test routes panel loads a case and hides on request', async () => {
+    await show()
     const panel = screen.getByRole('complementary', { name: 'Test routes' })
     expect(within(panel).getByText('no routes yet')).toBeTruthy()
     fireEvent.click(within(panel).getByRole('button', { name: /R4, ticket flag/ }))
@@ -130,8 +139,8 @@ describe('the page', () => {
     expect(within(screen.getByRole('complementary', { name: 'Test routes' })).getByText('no routes yet')).toBeTruthy()
   })
 
-  it('the status panel follows the answers: lookup facts, systems, routes', () => {
-    render(<App />)
+  it('the status panel follows the answers: lookup facts, systems, routes', async () => {
+    await show()
     const status = () => within(screen.getByRole('complementary', { name: 'Entered so far' }))
     expect(status().getByText('not chosen yet')).toBeTruthy()
     click(/Owner/)
@@ -161,7 +170,7 @@ describe('the page', () => {
   })
 
   it('an uploaded CSV becomes rows the buyer can fix', async () => {
-    toProperties('Bozzuto')
+    await toProperties('Bozzuto')
     const csv = 'Property,Units,Year\nThe Grove,240,1998\nHill House,n/a,1975\n'
     const file = new File([csv], 'list.csv', { type: 'text/csv' })
     fireEvent.change(screen.getByTestId('upload'), { target: { files: [file] } })
@@ -173,5 +182,28 @@ describe('the page', () => {
     expect(stage().getByText(/2 properties · 300 units/)).toBeTruthy()
     next()
     expect(screen.getByRole('heading').textContent).toBe('What do you need?')
+  })
+
+  it('waits for the manager list, and offers a retry when it cannot be loaded', async () => {
+    let calls = 0
+    const flaky = async () => {
+      calls += 1
+      if (calls === 1) throw new Error('down')
+      return MGRS
+    }
+    render(<App loadManagers={flaky} tools />)
+    expect(screen.getByRole('status').textContent).toBe('Loading…')
+    expect((await screen.findByRole('alert')).textContent).toMatch(/can’t load pricing/)
+    expect(screen.queryByRole('button', { name: /Owner/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+  })
+
+  it('hides the developer panels when they are off', async () => {
+    render(<App loadManagers={loadManagers} tools={false} />)
+    await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+    expect(screen.queryByRole('complementary', { name: 'Test routes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test routes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Status' })).toBeNull()
   })
 })

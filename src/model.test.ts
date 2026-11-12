@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { FREE, MGRS, PRODUCT_TIP } from './data'
+import { FREE, PRODUCT_TIP } from './data'
+import { MGRS } from './test/fixtures/managers'
 import { biPrice, checkoutOptions, daPrice, emailErr, lookup, money, suggest } from './model'
 
 describe('company lookup (map, Rule 13)', () => {

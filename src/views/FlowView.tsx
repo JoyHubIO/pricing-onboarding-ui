@@ -28,6 +28,7 @@ import {
   type PmsEntry,
   type Step,
 } from '../model'
+import type { AddressLookup } from '../lookup'
 import { CompanyFields, Field, PersonFields } from './Fields'
 import PropertiesStep from './PropertiesStep'
 
@@ -48,6 +49,8 @@ type Props = {
   asideRight?: ReactNode
   statusOpen?: boolean
   onToggleStatus?: () => void
+  /** The address lookup behind the properties screens. */
+  lookup?: AddressLookup
 }
 
 type Option = { v: string; label: string; sub?: string; links?: { label: string; href: string }[] }
@@ -295,7 +298,7 @@ function screen(s: FlowState, step: Step, show: boolean, props: Props): Screen {
         title: 'Which properties are ' + where + '?',
         sub: offline ? 'We will cover these on a quick call. They are not billed.' : undefined,
         tip: offline ? undefined : 'Look up an address, then confirm or enter units and year built. We use them to match the right property.',
-        body: row ? <PropertiesStep row={row} onChange={r => set({ rows: { ...s.rows, [key]: r } })} onEnter={onContinue} /> : null,
+        body: row ? <PropertiesStep row={row} onChange={r => set({ rows: { ...s.rows, [key]: r } })} onEnter={onContinue} lookup={props.lookup} /> : null,
         trailing: countLine(t.props, t.units) + (offline ? ' · not billed' : ''),
         error: show ? rowErr(row) : '',
       }

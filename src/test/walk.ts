@@ -1,8 +1,10 @@
 /** Helpers for walking the flow in tests: apply answers, press Continue, read the screen. */
 import { advance, current } from '../flow'
+import { MGRS } from './fixtures/managers'
 import { initialState, newRow, rowKey, stepKey, type FlowState, type Person, type PropsRow } from '../model'
 
-export const start = (): FlowState => initialState
+/** The first screen, with the test manager list loaded. */
+export const start = (): FlowState => ({ ...initialState, managers: MGRS })
 
 /** Apply `patch` and press Continue. */
 export const go = (s: FlowState, patch: Partial<FlowState> = {}): FlowState => advance({ ...s, ...patch })

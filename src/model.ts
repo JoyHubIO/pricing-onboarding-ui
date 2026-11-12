@@ -1,4 +1,4 @@
-import { BI_TIERS, DA_FIRST, DA_RATE_1, DA_RATE_2, FREE, INVOICE_THRESHOLD, MGRS, OURS, type ManagerInfo } from './data'
+import { BI_TIERS, DA_FIRST, DA_RATE_1, DA_RATE_2, FREE, INVOICE_THRESHOLD, OURS, type ManagerInfo } from './data'
 import type { Problem } from './upload'
 
 export type Role = 'owner' | 'manager' | 'proptech'
@@ -68,7 +68,7 @@ export type Step =
   | { id: 'call' }
 
 export type FlowState = {
-  /** The built-in list (ticket 2: live from the managers endpoint). */
+  /** The management companies, from the managers endpoint (api.ts). */
   managers: ManagerInfo[]
   /** The screens visited, last = current. Back pops; answers are kept. */
   stack: Step[]
@@ -92,7 +92,7 @@ export type FlowState = {
 }
 
 export const initialState: FlowState = {
-  managers: MGRS,
+  managers: [],
   stack: [{ id: 'start' }],
   tried: {},
   company: '',

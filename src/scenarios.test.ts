@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { current, showsNotice } from './flow'
 import { rowList, totals, type RouteCode } from './model'
-import { SCENARIOS } from './scenarios'
+import { cast, companies, scenarios } from './scenarios'
+import { MGRS } from './test/fixtures/managers'
+
+const SCENARIOS = scenarios(MGRS)
 
 const ALL: RouteCode[] = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'A2', 'X1', 'X2']
 
@@ -40,5 +43,36 @@ describe('the test scenarios', () => {
         expect(!!(r.person && r.person.email), sc.id + ' ' + r.key).toBe(asks)
       }
     }
+  })
+
+  it('load on companies the list holds, and none is missing one', () => {
+    expect(SCENARIOS.filter(sc => sc.missing).map(sc => sc.id)).toEqual([])
+    const c = cast(MGRS)
+    expect([c.single?.name, c.multi?.name, c.flagged?.name, c.noAdmin?.name, c.noAdminMulti?.name]).toEqual([
+      'Bozzuto',
+      'Asset Living',
+      'Greystar',
+      'Cushman & Wakefield',
+      'Mark Taylor Residential',
+    ])
+    expect(companies(MGRS).flagged.map(m => m.name)).toEqual(['Greystar', 'RPM'])
+  })
+
+  it('say which kind of company is lacking, and keep the cases that need none', () => {
+    const plain = MGRS.filter(m => m.systems.length <= 1 && m.hasAdmin && !m.ticket)
+    const cases = scenarios(plain)
+    const missing = cases.filter(sc => sc.missing).map(sc => sc.id)
+    expect(missing).toEqual(['r1-pick', 'r3-picked', 'r6', 'r4-flag', 'r4-no-admin', 'r4-no-admin-two', 'both', 'two-managers'])
+    expect(cases.find(sc => sc.id === 'r4-flag')?.missing).toMatch(/ticket flag set/)
+    // With no list at all, the cases about a company we have never seen still load.
+    const none = scenarios([])
+    expect(none.filter(sc => !sc.missing).map(sc => sc.id)).toEqual(['r2', 'r2-same-admin', 'x1-self', 'x1-only', 'x2', 'a2', 'r5-unknown-system', 'r5-unknown-admin', 'x1-manager'])
+    for (const sc of none.filter(x => !x.missing)) expect(sc.build().managers).toEqual([])
+  })
+
+  it('never take a listed company for the unknown one', () => {
+    const listed = [...MGRS, { ...MGRS[0], name: 'Fresh Management' }, { ...MGRS[0], name: 'Acme Holdings' }]
+    const a2 = scenarios(listed).find(sc => sc.id === 'a2')!
+    expect(rowList(a2.build()).map(r => [r.route, r.party])).toEqual([['A2', 'Fresh Management Test']])
   })
 })

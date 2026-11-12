@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { stubLookup, type AddressLookup } from '../lookup'
+import { echoLookup, type AddressLookup } from '../lookup'
 import { emptyDraft, type Draft, type Property, type PropsRow } from '../model'
 import { parseFile } from '../upload'
 
@@ -9,7 +9,7 @@ type Props = {
   row: PropsRow
   onChange: (r: PropsRow) => void
   onEnter: () => void
-  /** The address lookup; the stub until ticket 2. */
+  /** The address lookup; the page passes the API's. */
   lookup?: AddressLookup
 }
 
@@ -18,7 +18,7 @@ const Lab = ({ t }: { t: string }) => <span className="lab">{t}</span>
 const yearOk = (y: number) => y >= 1800 && y <= 2100
 
 /** C1, one route row (map, C1): one by one with an address lookup, an uploaded list, or counts. */
-export default function PropertiesStep({ row, onChange, onEnter, lookup = stubLookup }: Props) {
+export default function PropertiesStep({ row, onChange, onEnter, lookup = echoLookup }: Props) {
   const d = row.draft
   const [busy, setBusy] = useState(false)
   const [fileErr, setFileErr] = useState('')
