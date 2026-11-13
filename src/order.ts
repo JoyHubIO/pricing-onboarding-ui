@@ -38,7 +38,7 @@ export type OrderIn = {
   firstName: string
   lastName: string
   email: string
-  checkout: CheckoutChoice
+  checkout: CheckoutChoice | 'call'
   rows: OrderRowIn[]
   confirmedCompanyId: number | null
   createNewCompany: boolean | null
@@ -55,7 +55,12 @@ export type OrderResult = {
   number?: string | null
   monthlyTotal?: number | null
   checkout?: string | null
+  /** The stored order's signed token: what `POST /pricing/checkout` and the reopen link name it by. */
+  token?: string | null
 }
+
+/** What `POST /pricing/checkout` answers: Stripe's page for Pay now, or that the invoice is on its way. */
+export type CheckoutResult = { url?: string | null; invoiced: boolean }
 
 /** SavedQuoteDto. */
 export type SavedQuote = {
@@ -116,7 +121,7 @@ export async function readFiles(s: FlowState): Promise<Files> {
   return out
 }
 
-export function toOrder(s: FlowState, checkout: CheckoutChoice, files: Files = {}, answer: CompanyAnswer = {}): OrderIn {
+export function toOrder(s: FlowState, checkout: CheckoutChoice | 'call', files: Files = {}, answer: CompanyAnswer = {}): OrderIn {
   const t = totals(s)
   return {
     company: s.company.trim(),
@@ -148,6 +153,12 @@ export function toOrder(s: FlowState, checkout: CheckoutChoice, files: Files = {
   }
 }
 
+/** The plan as a call request (map, Section 5): the person asking is the one typed on the call screen, since
+ * that path never reaches the login details. */
+export function toCallOrder(s: FlowState, files: Files = {}): OrderIn {
+  return toOrder({ ...s, you: s.caller }, 'call', files)
+}
+
 /** What the screen says for a rejection code; anything unlisted gets the general line. */
 export const ORDER_ERRORS: Record<string, string> = {
   work_email_required: 'Please use your work email address.',
@@ -155,5 +166,14 @@ export const ORDER_ERRORS: Record<string, string> = {
   invoice_not_offered: 'An invoice is available for orders of $1,000 a month or more.',
   file_too_large: 'The uploaded list is too large. Please upload a file under 2 MB.',
   quote_unavailable: 'We can’t save this right now. Please try again shortly.',
+  plan_too_large: 'This plan is too large to submit here. Please contact us and we will set it up with you.',
+  account_exists: 'Your company already has an account. Ask your administrator, or contact us.',
+  already_ordered: 'This order has already been placed. Contact us if you want to change it.',
+  quote_superseded: 'This quote was replaced by a newer one. Open your latest quote to continue.',
+  quote_expired: 'This quote has expired. Save it again to get today’s price.',
+  checkout_unavailable: 'We can’t take payment right now. Your plan is saved; please try again shortly.',
+  billing_contact_required: 'Tell us who should receive the invoice.',
+  quote_not_found: 'We couldn’t find that order. Please submit your plan again.',
+  company_required: 'Tell us your company name.',
 }
 export const ORDER_FAILED = 'We couldn’t save this. Please try again.'

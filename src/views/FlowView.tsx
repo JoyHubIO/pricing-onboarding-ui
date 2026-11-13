@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ADMIN_TIP, INSTALL_NOTICE, OURS, PREVIEW_NOTE, PRODUCT_TIP, PROPTECH_TIP, REFUND_TERMS } from '../data'
+import { ADMIN_TIP, INSTALL_NOTICE, OURS, PRODUCT_TIP, PROPTECH_TIP, REFUND_TERMS } from '../data'
 import { current, progress, showsNotice, valid } from '../flow'
 import {
   asksCompanyFirst,
@@ -25,6 +25,7 @@ import {
   totals,
   type CheckoutChoice,
   type FlowState,
+  type Person,
   type PmsEntry,
   type Step,
 } from '../model'
@@ -56,28 +57,62 @@ type Props = {
   order?: OrderView
   /** Submit the order under a checkout choice, with the buyer's company answer when one was asked for. */
   onSubmit?: (checkout: CheckoutChoice, answer?: CompanyAnswer) => void
+  /** Ask for a call: the end of a plan with nothing to bill. */
+  onCall?: () => void
+  /** Who receives the invoice (Send invoice): the buyer until changed. */
+  billing?: Person
+  onBilling?: (p: Person) => void
+  /** Show the billing contact's errors: Request invoice was pressed with one missing. */
+  billingTried?: boolean
 }
 
 /** A quote reopened from its emailed link: which one, and what has changed since it was saved. */
-export type Reopened = { missing?: boolean; number?: string; replaced?: boolean; expired?: boolean; quoted?: number; today?: number }
+export type Reopened = {
+  missing?: boolean
+  number?: string
+  replaced?: boolean
+  expired?: boolean
+  quoted?: number
+  today?: number
+  /** The buyer came back from Stripe's page without paying. */
+  cancelled?: boolean
+}
+
+/** What was submitted: one of the three checkout choices, or the call request. */
+export type Submitted = CheckoutChoice | 'call'
 
 export type OrderView =
   | { state: 'idle'; reopened?: Reopened }
-  | { state: 'sending'; checkout: CheckoutChoice }
+  | { state: 'sending'; checkout: Submitted }
   | { state: 'confirm'; checkout: CheckoutChoice; candidates: { id: number; name: string; website?: string | null }[] }
-  | { state: 'saved'; checkout: CheckoutChoice; number: string; total: number | null; email: string }
-  | { state: 'failed'; checkout: CheckoutChoice; message: string }
+  /** Stored, and for an invoice or a call nothing more is owed by the buyer. `email` is where word goes. */
+  | { state: 'saved'; checkout: Submitted; number: string; total: number | null; email: string }
+  | { state: 'failed'; checkout: Submitted; message: string }
 
 const SUBMIT_LABEL: Record<CheckoutChoice, string> = { quote: 'Email my quote', invoice: 'Request invoice', pay: 'Continue to secure payment' }
 
 function reopenedLines(r: Reopened): string[] {
   if (r.missing) return ['We couldn’t open that quote. The link may be incomplete. You can build the plan again here.']
   const out: string[] = []
+  if (r.cancelled) out.push('Payment was not completed and nothing was charged. You can carry on from here.')
   if (r.replaced) out.push('This quote was replaced. This is your latest plan, ' + r.number + '.')
   else if (r.number) out.push('Quote ' + r.number + ', as you saved it.')
   if (r.expired) out.push('This quote has expired. Save it again to get today’s price.')
   if (r.quoted != null && r.today != null && r.quoted !== r.today) out.push('Pricing has changed since this quote: it was ' + money(r.quoted) + ' a month and is ' + money(r.today) + ' today.')
   return out
+}
+
+function savedLine(checkout: Submitted, number: string, email: string): string {
+  switch (checkout) {
+    case 'quote':
+      return 'Quote ' + number + ' is saved. We have emailed a link to ' + email + '; it is good for 30 days.'
+    case 'invoice':
+      return 'Order ' + number + ' is received. We will email the invoice to ' + email + '. It is due in 30 days and includes the 2% invoicing charge.'
+    case 'call':
+      return 'Call request ' + number + ' is received. We will email ' + email + ' to arrange a time. Nothing is charged.'
+    case 'pay':
+      return 'Order ' + number + ' is saved.'
+  }
 }
 
 /** The order's standing under the price: the company question (map, C3), the result, or why it failed. */
@@ -88,7 +123,7 @@ function OrderPanel({ order, pageTotal, onSubmit }: { order: OrderView; pageTota
     case 'sending':
       return (
         <p role="status" className="micro">
-          Saving…
+          {order.checkout === 'pay' ? 'Taking you to secure payment…' : order.checkout === 'call' ? 'Sending…' : 'Saving…'}
         </p>
       )
     case 'confirm':
@@ -110,9 +145,7 @@ function OrderPanel({ order, pageTotal, onSubmit }: { order: OrderView; pageTota
     case 'saved':
       return (
         <div className="notice" role="status">
-          {order.checkout === 'quote'
-            ? 'Quote ' + order.number + ' is saved. We have emailed a link to ' + order.email + '; it is good for 30 days.'
-            : 'Order ' + order.number + ' is saved. ' + (order.checkout === 'pay' ? 'Secure payment' : 'Invoicing') + ' is connected in the next release, so nothing is charged yet.'}
+          {savedLine(order.checkout, order.number, order.email)}
           {order.total != null && order.total !== pageTotal ? ' The price for this order is ' + money(order.total) + ' a month.' : ''}
         </div>
       )
@@ -165,8 +198,6 @@ type Screen = {
   cta?: string
   /** No Continue button: the screen moves on its own (single choice) or is the end. */
   noNext?: boolean
-  /** The end of this ticket's flow: the button is shown but wired later. */
-  inert?: boolean
   /** Text at the right end of the Continue row (the properties total). */
   trailing?: string
   /** A screen-level error in the Continue row (the properties row). */
@@ -581,15 +612,23 @@ function screen(s: FlowState, step: Step, show: boolean, props: Props): Screen {
       return {
         title: 'Let’s set up a quick call.',
         sub: 'We will connect these properties with you directly. Nothing is charged.',
-        cta: 'Request call',
-        inert: true,
-        body: <PersonFields p={s.caller} onChange={caller => set({ caller })} show={show} work emailLabel="Work email" onEnter={onContinue} />,
+        cta: 'Request a call',
+        body: (
+          <>
+            <PersonFields p={s.caller} onChange={caller => set({ caller })} show={show} work emailLabel="Work email" onEnter={onContinue} />
+            {!asksCompanyFirst(s) && (
+              <div className="fields">
+                <Field label="Company" value={s.company} onChange={company => set({ company })} err={s.company.trim() ? '' : 'Required'} show={show} placeholder="Company name" span={2} onEnter={onContinue} />
+              </div>
+            )}
+          </>
+        ),
       }
   }
 }
 
 export default function FlowView(props: Props) {
-  const { s, onContinue, onBack, onRestart, aside, panelOpen, onTogglePanel, asideRight, statusOpen, onToggleStatus, onSubmit } = props
+  const { s, onContinue, onBack, onRestart, aside, panelOpen, onTogglePanel, asideRight, statusOpen, onToggleStatus, onSubmit, onCall, onBilling } = props
   const order: OrderView = props.order ?? { state: 'idle' }
   const step = current(s)
   const show = !!s.tried[stepKey(step)]
@@ -599,14 +638,22 @@ export default function FlowView(props: Props) {
   // The notice names the person this screen collects (map, Section 4), when there is one.
   const noticeFor = step.id === 'pmsAdmin' ? s.pms[step.i].admin : null
   const noticeText = INSTALL_NOTICE + (noticeFor && noticeFor.email ? ' (' + noticeFor.first + ' ' + noticeFor.last + ', ' + noticeFor.email + ')' : '')
-  // Inert ends: Continue validates and shows the errors, then the preview note instead of moving on.
-  const tried = show && sc.inert
-  // The checkout choice whose submit this screen offers: Save quote and Send invoice on the price screen
-  // itself, Pay now on its own screen.
-  const submits: CheckoutChoice | null =
-    step.id === 'pay' ? 'pay' : step.id === 'checkout' && (s.checkout === 'quote' || s.checkout === 'invoice') ? s.checkout : null
+  // What this screen submits: Save quote and Send invoice on the price screen itself, Pay now and the call
+  // request on their own screens.
+  const submits: Submitted | null =
+    step.id === 'pay' ? 'pay' : step.id === 'call' ? 'call' : step.id === 'checkout' && (s.checkout === 'quote' || s.checkout === 'invoice') ? s.checkout : null
   const busy = order.state === 'sending'
-  const onNext = step.id === 'pay' ? () => !busy && onSubmit?.('pay') : onContinue
+  // A call request already received is not sent twice.
+  const done = order.state === 'saved' && order.checkout === 'call'
+  const onNext =
+    step.id === 'pay'
+      ? () => !busy && onSubmit?.('pay')
+      : step.id === 'call'
+        ? // Continue shows the errors of an incomplete screen; a complete one is sent.
+          () => (valid(s, step) ? !busy && !done && onCall?.() : onContinue())
+        : onContinue
+  const billing = props.billing ?? s.you
+  const invoicing = step.id === 'checkout' && s.checkout === 'invoice'
   const reopened = order.state === 'idle' && order.reopened ? reopenedLines(order.reopened) : []
   const missing = order.state === 'idle' && !!order.reopened?.missing
   return (
@@ -652,20 +699,26 @@ export default function FlowView(props: Props) {
                   <path d="M15 18l-6-6 6-6" />
                 </svg>
               </button>
-              <button type="button" className="arrow" aria-label="Next" onClick={onNext} disabled={!!sc.inert}>
+              <button type="button" className="arrow" aria-label="Next" onClick={onNext}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M9 18l6-6-6-6" />
                 </svg>
               </button>
             </div>
             <div className="stack">
-              {(step.id === 'checkout' || missing) && reopened.length > 0 && (
+              {(step.id === 'checkout' || step.id === 'pay' || missing) && reopened.length > 0 && (
                 <div className="notice" role="status">
                   {reopened.join(' ')}
                 </div>
               )}
               {sc.body}
-              {step.id === 'checkout' && submits && (
+              {invoicing && (
+                <div className="stack" style={{ gap: 8 }} role="group" aria-label="Billing contact">
+                  <span className="lab">Who should receive the invoice?</span>
+                  <PersonFields p={billing} onChange={p => onBilling?.(p)} show={!!props.billingTried} emailLabel="Billing email" />
+                </div>
+              )}
+              {step.id === 'checkout' && (submits === 'quote' || submits === 'invoice') && (
                 <div className="ctarow">
                   <button type="button" className="btn" onClick={() => onSubmit?.(submits)} disabled={busy}>
                     {SUBMIT_LABEL[submits]}
@@ -681,7 +734,7 @@ export default function FlowView(props: Props) {
               {notice && <div className="notice">{noticeText}</div>}
               {!sc.noNext && (
                 <div className="ctarow">
-                  <button type="button" className="btn" onClick={onNext} disabled={step.id === 'pay' && busy}>
+                  <button type="button" className="btn" onClick={onNext} disabled={(step.id === 'pay' || step.id === 'call') && (busy || done)}>
                     {sc.cta ?? 'Continue'}
                   </button>
                   {sc.error && (
@@ -693,7 +746,6 @@ export default function FlowView(props: Props) {
                   {sc.trailing && <span className="total">{sc.trailing}</span>}
                 </div>
               )}
-              {tried && <span className="micro">{PREVIEW_NOTE}</span>}
               {step.id === 'pay' && <span className="micro">Payment is processed securely by Stripe.</span>}
             </div>
           </div>

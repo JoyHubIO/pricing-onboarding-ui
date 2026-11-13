@@ -66,7 +66,6 @@ export const PRODUCT_TIP =
   'Data Access provides users access to our MCP to query their data, to store property data in their data warehouse, and ETL services for standardizing one or more properties from multiple systems. Business Intelligence is our enterprise reporting and portfolio management platform, and it includes all of the features of Data Access.'
 
 /** Shown where a button is not wired up yet (checkout, call). */
-export const PREVIEW_NOTE = 'Not available yet in this preview: payment, quotes, invoices and call requests are connected next.'
 
 export const ADMIN_TIP = 'We send out a short intro to set up the connection. If you don’t know the admin’s contact, provide someone you do.'
 export const PROPTECH_TIP = 'Prefer not to share your client’s contact? Enter your own.'

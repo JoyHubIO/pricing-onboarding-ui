@@ -2,7 +2,7 @@
  * Integrations pipeline and the address lookup. The page only reads; nothing here writes to HubSpot. */
 import { OURS, type ManagerInfo } from './data'
 import type { AddressLookup, Geocoded } from './lookup'
-import type { OrderIn, OrderResult, SavedQuote } from './order'
+import type { CheckoutResult, OrderIn, OrderResult, PersonIn, SavedQuote } from './order'
 
 /** The API host, without a trailing slash; '' when the page is built with none. */
 export function apiBase(env: Record<string, string | undefined> = import.meta.env): string {
@@ -84,22 +84,38 @@ export function apiLookup(fetcher: typeof fetch = fetch, base: string = apiBase(
   }
 }
 
-/** Submit the order: the one call behind Save quote, Pay now and Send invoice. A rejection carries the API's code. */
-export async function submitOrder(order: OrderIn, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<OrderResult> {
+/** POST a JSON body to the pricing API. A rejection carries the API's own code. */
+async function postJson<T>(path: string, body: unknown, fetcher: typeof fetch, base: string): Promise<T> {
   if (!base) throw new ApiError('No API host is configured (VITE_SCALA_API_URL).')
-  const res = await fetcher(base + '/pricing/order', {
+  const res = await fetcher(base + path, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(order),
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const code = await res
       .json()
       .then(b => (b && typeof b.error === 'string' ? b.error : ''))
       .catch(() => '')
-    throw new ApiError('The API answered ' + res.status + ' for /pricing/order', code)
+    throw new ApiError('The API answered ' + res.status + ' for ' + path, code)
   }
-  return (await res.json()) as OrderResult
+  return (await res.json()) as T
+}
+
+/** Submit the order: the one call behind Save quote, Pay now and Send invoice. A rejection carries the API's code. */
+export function submitOrder(order: OrderIn, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<OrderResult> {
+  return postJson<OrderResult>('/pricing/order', order, fetcher, base)
+}
+
+/** Open payment for a stored order by its token: Stripe's page for Pay now, or the invoice for Send invoice,
+ * which goes to the billing contact. */
+export function submitCheckout(token: string, billing?: PersonIn, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<CheckoutResult> {
+  return postJson<CheckoutResult>('/pricing/checkout', billing ? { token, billing } : { token }, fetcher, base)
+}
+
+/** Ask for a call: the plan whose rows are all covered on one, so nothing is billed. */
+export function submitCall(order: OrderIn, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<OrderResult> {
+  return postJson<OrderResult>('/pricing/call', order, fetcher, base)
 }
 
 /** A saved quote by its emailed link's token; null when the link is not one of ours. */

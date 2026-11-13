@@ -137,7 +137,8 @@ export function valid(s: FlowState, step: Step): boolean {
     case 'pay':
       return true
     case 'call':
-      return personOk(s.caller)
+      // The call path never reaches the login screen, so the company is asked here when it was not first.
+      return personOk(s.caller, true) && (asksCompanyFirst(s) || !!s.company.trim())
   }
 }
 

@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ApiError } from '../api'
 import App from '../App'
 import { INSTALL_NOTICE, REFUND_TERMS } from '../data'
-import type { OrderIn, OrderResult, SavedQuote } from '../order'
+import type { CheckoutResult, OrderIn, OrderResult, PersonIn, SavedQuote } from '../order'
 import { MGRS } from '../test/fixtures/managers'
 
 beforeAll(() => {
@@ -211,17 +211,27 @@ describe('the page', () => {
 })
 
 describe('submitting the order', () => {
-  const saved = (number: string, checkout: string, monthlyTotal = 1000): OrderResult => ({ needsConfirmation: false, candidates: [], number, monthlyTotal, checkout })
+  const saved = (number: string, checkout: string, monthlyTotal = 1000): OrderResult => ({
+    needsConfirmation: false,
+    candidates: [],
+    number,
+    monthlyTotal,
+    checkout,
+    token: 'tok-' + number,
+  })
 
-  /** Bozzuto, Data Access for 20 properties, on the price screen at $1,000. */
-  async function toPrice(submit: (o: OrderIn) => Promise<OrderResult>) {
-    render(<App loadManagers={loadManagers} tools submit={submit} quoteToken={null} />)
+  type Checkout = (token: string, billing?: PersonIn) => Promise<CheckoutResult>
+  type Extra = { checkout?: Checkout; redirect?: (url: string) => void }
+
+  /** Bozzuto, Data Access, on the price screen: 20 properties is $1,000, 22 is $1,100 and offers an invoice. */
+  async function toPrice(submit: (o: OrderIn) => Promise<OrderResult>, extra: Extra = {}, properties = 20) {
+    render(<App loadManagers={loadManagers} tools submit={submit} quoteToken={null} paidToken={null} {...extra} />)
     await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
     click(/Owner/)
     click(/We self-manage/)
     type(/^Company$/, 'Bozzuto')
     next()
-    counts(20, 2000)
+    counts(properties, 2000)
     click(/Data Access/)
     who('ann@acme.com')
   }
@@ -238,13 +248,128 @@ describe('submitting the order', () => {
     expect(sent[0].page).toBeTruthy()
   })
 
-  it('Pay now sends the same plan and says payment comes next', async () => {
+  it('Pay now stores the plan, opens checkout by its token and leaves for Stripe’s page', async () => {
     const sent: OrderIn[] = []
-    await toPrice(async o => (sent.push(o), saved('RRE-0043', 'pay')))
+    const opened: [string, PersonIn | undefined][] = []
+    const went: string[] = []
+    await toPrice(async o => (sent.push(o), saved('RRE-0043', 'pay')), {
+      checkout: async (token, billing) => (opened.push([token, billing]), { url: 'https://checkout.stripe.test/pay/cs_1', invoiced: false }),
+      redirect: url => went.push(url),
+    })
     click(/Pay now/)
     click('Continue to secure payment')
-    await screen.findByText(/Order RRE-0043 is saved\. Secure payment is connected in the next release/)
+    await waitFor(() => expect(went).toEqual(['https://checkout.stripe.test/pay/cs_1']))
     expect(sent.map(o => o.checkout)).toEqual(['pay'])
+    expect(opened).toEqual([['tok-RRE-0043', undefined]])
+    expect(screen.getByRole('status').textContent).toBe('Taking you to secure payment…')
+    expect(screen.queryByText(/next release/)).toBeNull()
+  })
+
+  it('a stranger to an existing account is told so and is not sent to pay', async () => {
+    const went: string[] = []
+    await toPrice(async () => saved('RRE-0048', 'pay'), {
+      checkout: async () => {
+        throw new ApiError('409', 'account_exists')
+      },
+      redirect: url => went.push(url),
+    })
+    click(/Pay now/)
+    click('Continue to secure payment')
+    expect((await screen.findByRole('alert')).textContent).toBe('Your company already has an account. Ask your administrator, or contact us.')
+    expect(went).toEqual([])
+  })
+
+  it('Send invoice asks who receives it, sends that contact and says where the invoice goes', async () => {
+    const sent: OrderIn[] = []
+    const opened: [string, PersonIn | undefined][] = []
+    await toPrice(async o => (sent.push(o), saved('RRE-0049', 'invoice', 1100)), { checkout: async (token, billing) => (opened.push([token, billing]), { url: null, invoiced: true }) }, 22)
+    click(/Send invoice/)
+    // Prefilled with the buyer, and editable
+    const group = within(screen.getByRole('group', { name: 'Billing contact' }))
+    expect((group.getByLabelText(/^Billing email/) as HTMLInputElement).value).toBe('ann@acme.com')
+    fireEvent.change(group.getByLabelText(/^Billing email/), { target: { value: '' } })
+    click('Request invoice')
+    expect(group.getByText('Required')).toBeTruthy()
+    expect(sent).toHaveLength(0)
+    fireEvent.change(group.getByLabelText(/^First name/), { target: { value: 'Pat' } })
+    fireEvent.change(group.getByLabelText(/^Last name/), { target: { value: 'Payables' } })
+    fireEvent.change(group.getByLabelText(/^Billing email/), { target: { value: 'ap@acme.com' } })
+    click('Request invoice')
+    await screen.findByText(/Order RRE-0049 is received\. We will email the invoice to ap@acme\.com\. It is due in 30 days and includes the 2% invoicing charge\./)
+    expect(sent.map(o => [o.checkout, o.email])).toEqual([['invoice', 'ann@acme.com']])
+    expect(opened).toEqual([['tok-RRE-0049', { first: 'Pat', last: 'Payables', email: 'ap@acme.com' }]])
+  })
+
+  it('names a plan too large to submit', async () => {
+    await toPrice(async () => {
+      throw new ApiError('413', 'plan_too_large')
+    })
+    click(/Save quote/)
+    click('Email my quote')
+    expect((await screen.findByRole('alert')).textContent).toBe('This plan is too large to submit here. Please contact us and we will set it up with you.')
+  })
+
+  it('a plan with nothing to bill asks for a call, once', async () => {
+    const calls: OrderIn[] = []
+    render(
+      <App
+        loadManagers={loadManagers}
+        tools
+        quoteToken={null}
+        paidToken={null}
+        requestCall={async o => (calls.push(o), { needsConfirmation: false, candidates: [], number: 'RRE-0050', monthlyTotal: 0, checkout: 'call', token: 't' })}
+      />,
+    )
+    await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+    click(/Owner/)
+    click(/A third-party manager/)
+    type(/^Management company$/, 'Fresh Management')
+    next()
+    click(/^Other$/)
+    counts(3, 300)
+    click(/^No$/)
+    expect(screen.getByRole('heading').textContent).toBe('Let’s set up a quick call.')
+    // An incomplete screen shows its errors and sends nothing
+    click('Request a call')
+    expect(screen.getAllByText('Required').length).toBeGreaterThan(0)
+    expect(calls).toHaveLength(0)
+    type('First name', 'Ann')
+    type('Last name', 'Buyer')
+    type('Work email', 'ann@acme.com')
+    type('Company', 'Acme Holdings')
+    click('Request a call')
+    await screen.findByText(/Call request RRE-0050 is received\. We will email ann@acme\.com to arrange a time\. Nothing is charged\./)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ checkout: 'call', company: 'Acme Holdings', firstName: 'Ann', lastName: 'Buyer', email: 'ann@acme.com', properties: 0 })
+    expect(calls[0].rows.map(r => [r.route, r.billable])).toEqual([['X1', false]])
+    expect((screen.getByRole('button', { name: 'Request a call' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  const quoted = (page: unknown, status = 'quoted'): SavedQuote => ({ number: 'RRE-0051', status, monthlyTotal: 1000, currentTotal: 1000, validUntil: '2026-12-13', expired: false, replaced: false, payload: { page } })
+
+  it('back from Stripe paid: the order is shown as received, whether or not Stripe’s notice has landed', async () => {
+    for (const status of ['paid', 'quoted']) {
+      render(<App loadManagers={loadManagers} tools paidToken="tok" quoteToken={null} loadQuote={async t => (t === 'tok' ? quoted(null, status) : null)} />)
+      expect((await screen.findByRole('heading')).textContent).toBe('Order received')
+      expect(screen.getByText(/Order RRE-0051 · \$1,000 \/ month/)).toBeTruthy()
+      cleanup()
+    }
+    render(<App loadManagers={loadManagers} tools paidToken="bad" quoteToken={null} loadQuote={async () => null} />)
+    expect((await screen.findByRole('alert')).textContent).toMatch(/We couldn’t find that order/)
+    click('Start a new plan')
+    await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+  })
+
+  it('back from Stripe unpaid: the plan reopens and says nothing was charged', async () => {
+    let plan: unknown = null
+    await toPrice(async o => ((plan = o.page), saved('RRE-0052', 'pay')), { checkout: async () => ({ url: 'https://checkout.stripe.test/x', invoiced: false }), redirect: () => {} })
+    click(/Pay now/)
+    click('Continue to secure payment')
+    await waitFor(() => expect(plan).toBeTruthy())
+    cleanup()
+    render(<App loadManagers={loadManagers} tools quoteToken="tok" paidToken={null} cancelled loadQuote={async () => quoted(plan)} />)
+    await screen.findByText(/Payment was not completed and nothing was charged\. You can carry on from here\./)
+    expect(screen.getByRole('heading').textContent).toBe('Pay $1,000')
   })
 
   it('asks which company when the name is taken, and sends the answer', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, apiBase, apiLookup, fetchManagers, toManagerInfo } from './api'
+import { ApiError, apiBase, apiLookup, fetchManagers, submitCall, submitCheckout, toManagerInfo } from './api'
+import type { OrderIn } from './order'
 
 const answer = (body: unknown, status = 200) =>
   (async () => ({ ok: status >= 200 && status < 300, status, json: async () => body })) as unknown as typeof fetch
@@ -82,5 +83,39 @@ describe('the address lookup', () => {
 
   it('rejects when the request fails, which the screen reports', async () => {
     await expect(apiLookup(answer({}, 500), 'http://api.test')('x')).rejects.toBeInstanceOf(ApiError)
+  })
+})
+
+describe('payment and the call request', () => {
+  /** A fetch that records each POST's path and body. */
+  function posting(body: unknown, status = 200) {
+    const sent: [string, unknown][] = []
+    const fetcher = (async (url: string, init: { body: string }) => {
+      sent.push([url, JSON.parse(init.body)])
+      return { ok: status < 300, status, json: async () => body }
+    }) as unknown as typeof fetch
+    return { sent, fetcher }
+  }
+
+  it('opens checkout by the order token, with the billing contact only for an invoice', async () => {
+    const { sent, fetcher } = posting({ url: 'https://stripe.test/c', invoiced: false })
+    expect(await submitCheckout('tok', undefined, fetcher, 'http://api.test')).toEqual({ url: 'https://stripe.test/c', invoiced: false })
+    await submitCheckout('tok', { first: 'Pat', last: 'Payables', email: 'ap@acme.com' }, fetcher, 'http://api.test')
+    expect(sent).toEqual([
+      ['http://api.test/pricing/checkout', { token: 'tok' }],
+      ['http://api.test/pricing/checkout', { token: 'tok', billing: { first: 'Pat', last: 'Payables', email: 'ap@acme.com' } }],
+    ])
+  })
+
+  it('carries the API’s rejection code', async () => {
+    const { fetcher } = posting({ error: 'account_exists' }, 409)
+    await expect(submitCheckout('tok', undefined, fetcher, 'http://api.test')).rejects.toMatchObject({ code: 'account_exists' })
+  })
+
+  it('posts a call request to /pricing/call', async () => {
+    const { sent, fetcher } = posting({ needsConfirmation: false, candidates: [], number: 'RRE-0001', checkout: 'call' })
+    const order = { company: 'Acme', checkout: 'call' } as unknown as OrderIn
+    expect((await submitCall(order, fetcher, 'http://api.test')).number).toBe('RRE-0001')
+    expect(sent[0][0]).toBe('http://api.test/pricing/call')
   })
 })
