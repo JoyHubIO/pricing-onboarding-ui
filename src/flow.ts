@@ -132,7 +132,8 @@ export function valid(s: FlowState, step: Step): boolean {
     case 'you':
       return personOk(s.you, true) && (asksCompanyFirst(s) || !!s.company.trim())
     case 'checkout':
-      return s.checkout === 'pay'
+      // Save quote and Send invoice are submitted from this screen; only Pay now has a next one.
+      return !!s.checkout
     case 'pay':
       return true
     case 'call':

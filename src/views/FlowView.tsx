@@ -29,6 +29,7 @@ import {
   type Step,
 } from '../model'
 import type { AddressLookup } from '../lookup'
+import type { CompanyAnswer } from '../order'
 import { CompanyFields, Field, PersonFields } from './Fields'
 import PropertiesStep from './PropertiesStep'
 
@@ -51,6 +52,77 @@ type Props = {
   onToggleStatus?: () => void
   /** The address lookup behind the properties screens. */
   lookup?: AddressLookup
+  /** Where the submitted order stands, and the note of a quote reopened from its link. */
+  order?: OrderView
+  /** Submit the order under a checkout choice, with the buyer's company answer when one was asked for. */
+  onSubmit?: (checkout: CheckoutChoice, answer?: CompanyAnswer) => void
+}
+
+/** A quote reopened from its emailed link: which one, and what has changed since it was saved. */
+export type Reopened = { missing?: boolean; number?: string; replaced?: boolean; expired?: boolean; quoted?: number; today?: number }
+
+export type OrderView =
+  | { state: 'idle'; reopened?: Reopened }
+  | { state: 'sending'; checkout: CheckoutChoice }
+  | { state: 'confirm'; checkout: CheckoutChoice; candidates: { id: number; name: string; website?: string | null }[] }
+  | { state: 'saved'; checkout: CheckoutChoice; number: string; total: number | null; email: string }
+  | { state: 'failed'; checkout: CheckoutChoice; message: string }
+
+const SUBMIT_LABEL: Record<CheckoutChoice, string> = { quote: 'Email my quote', invoice: 'Request invoice', pay: 'Continue to secure payment' }
+
+function reopenedLines(r: Reopened): string[] {
+  if (r.missing) return ['We couldn’t open that quote. The link may be incomplete. You can build the plan again here.']
+  const out: string[] = []
+  if (r.replaced) out.push('This quote was replaced. This is your latest plan, ' + r.number + '.')
+  else if (r.number) out.push('Quote ' + r.number + ', as you saved it.')
+  if (r.expired) out.push('This quote has expired. Save it again to get today’s price.')
+  if (r.quoted != null && r.today != null && r.quoted !== r.today) out.push('Pricing has changed since this quote: it was ' + money(r.quoted) + ' a month and is ' + money(r.today) + ' today.')
+  return out
+}
+
+/** The order's standing under the price: the company question (map, C3), the result, or why it failed. */
+function OrderPanel({ order, pageTotal, onSubmit }: { order: OrderView; pageTotal: number; onSubmit?: (checkout: CheckoutChoice, answer?: CompanyAnswer) => void }) {
+  switch (order.state) {
+    case 'idle':
+      return null
+    case 'sending':
+      return (
+        <p role="status" className="micro">
+          Saving…
+        </p>
+      )
+    case 'confirm':
+      return (
+        <div className="stack" style={{ gap: 10 }} role="group" aria-label="Confirm your company">
+          <span className="lab">{order.candidates.length ? 'Is one of these your company?' : 'We don’t have your company yet.'}</span>
+          {order.candidates.map(c => (
+            <button type="button" key={c.id} className="opt" onClick={() => onSubmit?.(order.checkout, { confirmedCompanyId: c.id })}>
+              <span className="opt-label">{c.name}</span>
+              {c.website && <span className="opt-sub">{c.website}</span>}
+            </button>
+          ))}
+          <button type="button" className="opt" onClick={() => onSubmit?.(order.checkout, { createNewCompany: true })}>
+            <span className="opt-label">{order.candidates.length ? 'None of these' : 'Add my company'}</span>
+            <span className="opt-sub">Create a new company record</span>
+          </button>
+        </div>
+      )
+    case 'saved':
+      return (
+        <div className="notice" role="status">
+          {order.checkout === 'quote'
+            ? 'Quote ' + order.number + ' is saved. We have emailed a link to ' + order.email + '; it is good for 30 days.'
+            : 'Order ' + order.number + ' is saved. ' + (order.checkout === 'pay' ? 'Secure payment' : 'Invoicing') + ' is connected in the next release, so nothing is charged yet.'}
+          {order.total != null && order.total !== pageTotal ? ' The price for this order is ' + money(order.total) + ' a month.' : ''}
+        </div>
+      )
+    case 'failed':
+      return (
+        <span role="alert" className="err">
+          {order.message}
+        </span>
+      )
+  }
 }
 
 type Option = { v: string; label: string; sub?: string; links?: { label: string; href: string }[] }
@@ -467,7 +539,6 @@ function screen(s: FlowState, step: Step, show: boolean, props: Props): Screen {
         body: (
           <div className="stack" style={{ gap: 22 }}>
             <Choices cols={opts.length} value={s.checkout} onPick={v => choose({ checkout: v as CheckoutChoice })} options={opts} />
-            {s.checkout && s.checkout !== 'pay' && <span className="micro">{PREVIEW_NOTE}</span>}
             <div className="stack" style={{ gap: 8 }}>
               <span className="lab">What happens after payment</span>
               <div className="routes">
@@ -497,8 +568,7 @@ function screen(s: FlowState, step: Step, show: boolean, props: Props): Screen {
       return {
         title: 'Pay ' + money(m),
         sub: 'First month, billed monthly from today. ' + REFUND_TERMS,
-        cta: 'Continue to secure payment',
-        inert: true,
+        cta: SUBMIT_LABEL.pay,
         body: (
           <div className="stripebox">
             <span className="lab">Stripe Checkout</span>
@@ -519,7 +589,8 @@ function screen(s: FlowState, step: Step, show: boolean, props: Props): Screen {
 }
 
 export default function FlowView(props: Props) {
-  const { s, onContinue, onBack, onRestart, aside, panelOpen, onTogglePanel, asideRight, statusOpen, onToggleStatus } = props
+  const { s, onContinue, onBack, onRestart, aside, panelOpen, onTogglePanel, asideRight, statusOpen, onToggleStatus, onSubmit } = props
+  const order: OrderView = props.order ?? { state: 'idle' }
   const step = current(s)
   const show = !!s.tried[stepKey(step)]
   const sc = screen(s, step, show, props)
@@ -530,6 +601,14 @@ export default function FlowView(props: Props) {
   const noticeText = INSTALL_NOTICE + (noticeFor && noticeFor.email ? ' (' + noticeFor.first + ' ' + noticeFor.last + ', ' + noticeFor.email + ')' : '')
   // Inert ends: Continue validates and shows the errors, then the preview note instead of moving on.
   const tried = show && sc.inert
+  // The checkout choice whose submit this screen offers: Save quote and Send invoice on the price screen
+  // itself, Pay now on its own screen.
+  const submits: CheckoutChoice | null =
+    step.id === 'pay' ? 'pay' : step.id === 'checkout' && (s.checkout === 'quote' || s.checkout === 'invoice') ? s.checkout : null
+  const busy = order.state === 'sending'
+  const onNext = step.id === 'pay' ? () => !busy && onSubmit?.('pay') : onContinue
+  const reopened = order.state === 'idle' && order.reopened ? reopenedLines(order.reopened) : []
+  const missing = order.state === 'idle' && !!order.reopened?.missing
   return (
     <div className="app">
       <div className="top">
@@ -573,14 +652,27 @@ export default function FlowView(props: Props) {
                   <path d="M15 18l-6-6 6-6" />
                 </svg>
               </button>
-              <button type="button" className="arrow" aria-label="Next" onClick={onContinue} disabled={!!sc.inert}>
+              <button type="button" className="arrow" aria-label="Next" onClick={onNext} disabled={!!sc.inert}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M9 18l6-6-6-6" />
                 </svg>
               </button>
             </div>
             <div className="stack">
+              {(step.id === 'checkout' || missing) && reopened.length > 0 && (
+                <div className="notice" role="status">
+                  {reopened.join(' ')}
+                </div>
+              )}
               {sc.body}
+              {step.id === 'checkout' && submits && (
+                <div className="ctarow">
+                  <button type="button" className="btn" onClick={() => onSubmit?.(submits)} disabled={busy}>
+                    {SUBMIT_LABEL[submits]}
+                  </button>
+                </div>
+              )}
+              {submits && <OrderPanel order={order} pageTotal={monthly(s)} onSubmit={onSubmit} />}
               {show && sc.noNext && !valid(s, step) && (
                 <span role="alert" className="err">
                   Pick one to continue.
@@ -589,7 +681,7 @@ export default function FlowView(props: Props) {
               {notice && <div className="notice">{noticeText}</div>}
               {!sc.noNext && (
                 <div className="ctarow">
-                  <button type="button" className="btn" onClick={onContinue}>
+                  <button type="button" className="btn" onClick={onNext} disabled={step.id === 'pay' && busy}>
                     {sc.cta ?? 'Continue'}
                   </button>
                   {sc.error && (

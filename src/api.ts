@@ -2,6 +2,7 @@
  * Integrations pipeline and the address lookup. The page only reads; nothing here writes to HubSpot. */
 import { OURS, type ManagerInfo } from './data'
 import type { AddressLookup, Geocoded } from './lookup'
+import type { OrderIn, OrderResult, SavedQuote } from './order'
 
 /** The API host, without a trailing slash; '' when the page is built with none. */
 export function apiBase(env: Record<string, string | undefined> = import.meta.env): string {
@@ -47,7 +48,15 @@ export function toManagerInfo(m: ManagerDto): ManagerInfo {
   }
 }
 
-export class ApiError extends Error {}
+/** `code` is the API's own rejection code (PricingErrorDto), when it sent one. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string = '',
+  ) {
+    super(message)
+  }
+}
 
 async function getJson<T>(path: string, fetcher: typeof fetch, base: string): Promise<T> {
   if (!base) throw new ApiError('No API host is configured (VITE_SCALA_API_URL).')
@@ -73,4 +82,31 @@ export function apiLookup(fetcher: typeof fetch = fetch, base: string = apiBase(
     const found: Geocoded = { address: body.address, units: body.units ?? null, yearBuilt: body.yearBuilt ?? null }
     return found
   }
+}
+
+/** Submit the order: the one call behind Save quote, Pay now and Send invoice. A rejection carries the API's code. */
+export async function submitOrder(order: OrderIn, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<OrderResult> {
+  if (!base) throw new ApiError('No API host is configured (VITE_SCALA_API_URL).')
+  const res = await fetcher(base + '/pricing/order', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(order),
+  })
+  if (!res.ok) {
+    const code = await res
+      .json()
+      .then(b => (b && typeof b.error === 'string' ? b.error : ''))
+      .catch(() => '')
+    throw new ApiError('The API answered ' + res.status + ' for /pricing/order', code)
+  }
+  return (await res.json()) as OrderResult
+}
+
+/** A saved quote by its emailed link's token; null when the link is not one of ours. */
+export async function fetchQuote(token: string, fetcher: typeof fetch = fetch, base: string = apiBase()): Promise<SavedQuote | null> {
+  if (!base) throw new ApiError('No API host is configured (VITE_SCALA_API_URL).')
+  const res = await fetcher(base + '/pricing/quote/' + encodeURIComponent(token), { headers: { Accept: 'application/json' } })
+  if (res.status === 404) return null
+  if (!res.ok) throw new ApiError('The API answered ' + res.status + ' for /pricing/quote')
+  return (await res.json()) as SavedQuote
 }

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { ApiError } from '../api'
 import App from '../App'
-import { INSTALL_NOTICE, PREVIEW_NOTE, REFUND_TERMS } from '../data'
+import { INSTALL_NOTICE, REFUND_TERMS } from '../data'
+import type { OrderIn, OrderResult, SavedQuote } from '../order'
 import { MGRS } from '../test/fixtures/managers'
 
 beforeAll(() => {
@@ -72,9 +74,9 @@ describe('the page', () => {
     expect(screen.getByRole('button', { name: /Save quote/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Send invoice/ })).toBeNull()
     expect(within(screen.getByText('What happens after payment').parentElement!).getByText('R1')).toBeTruthy()
-    // Save quote is inert in this ticket
+    // Save quote offers its submit on the price screen
     click(/Save quote/)
-    expect(screen.getByText(PREVIEW_NOTE)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Email my quote' })).toBeTruthy()
     // Pay now shows the refund terms and stops
     click(/Pay now/)
     expect(screen.getByRole('heading').textContent).toBe('Pay $1,000')
@@ -205,5 +207,91 @@ describe('the page', () => {
     expect(screen.queryByRole('complementary', { name: 'Test routes' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Test routes' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Status' })).toBeNull()
+  })
+})
+
+describe('submitting the order', () => {
+  const saved = (number: string, checkout: string, monthlyTotal = 1000): OrderResult => ({ needsConfirmation: false, candidates: [], number, monthlyTotal, checkout })
+
+  /** Bozzuto, Data Access for 20 properties, on the price screen at $1,000. */
+  async function toPrice(submit: (o: OrderIn) => Promise<OrderResult>) {
+    render(<App loadManagers={loadManagers} tools submit={submit} quoteToken={null} />)
+    await waitFor(() => stage().getByRole('button', { name: /Owner/ }))
+    click(/Owner/)
+    click(/We self-manage/)
+    type(/^Company$/, 'Bozzuto')
+    next()
+    counts(20, 2000)
+    click(/Data Access/)
+    who('ann@acme.com')
+  }
+
+  it('Save quote sends the whole plan once and says where the link went', async () => {
+    const sent: OrderIn[] = []
+    await toPrice(async o => (sent.push(o), saved('RRE-0042', 'quote')))
+    click(/Save quote/)
+    click('Email my quote')
+    await screen.findByText(/Quote RRE-0042 is saved\. We have emailed a link to ann@acme\.com/)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ company: 'Bozzuto', checkout: 'quote', email: 'ann@acme.com', product: 'da', units: 2000, properties: 20, monthlyTotal: 1000 })
+    expect(sent[0].rows.map(r => [r.route, r.billable, r.properties?.units])).toEqual([['R1', true, 2000]])
+    expect(sent[0].page).toBeTruthy()
+  })
+
+  it('Pay now sends the same plan and says payment comes next', async () => {
+    const sent: OrderIn[] = []
+    await toPrice(async o => (sent.push(o), saved('RRE-0043', 'pay')))
+    click(/Pay now/)
+    click('Continue to secure payment')
+    await screen.findByText(/Order RRE-0043 is saved\. Secure payment is connected in the next release/)
+    expect(sent.map(o => o.checkout)).toEqual(['pay'])
+  })
+
+  it('asks which company when the name is taken, and sends the answer', async () => {
+    const sent: OrderIn[] = []
+    await toPrice(async o => {
+      sent.push(o)
+      return o.confirmedCompanyId || o.createNewCompany ? saved('RRE-0044', 'quote') : { needsConfirmation: true, candidates: [{ id: 51, name: 'Bozzuto', website: 'bozzuto.com' }] }
+    })
+    click(/Save quote/)
+    click('Email my quote')
+    await screen.findByText('Is one of these your company?')
+    click(/bozzuto\.com/)
+    await screen.findByText(/Quote RRE-0044 is saved/)
+    expect(sent.map(o => o.confirmedCompanyId)).toEqual([null, 51])
+  })
+
+  it('says the server price when it differs, and names a rejection', async () => {
+    await toPrice(async () => saved('RRE-0045', 'quote', 1100))
+    click(/Save quote/)
+    click('Email my quote')
+    await screen.findByText(/The price for this order is \$1,100 a month\./)
+    cleanup()
+    await toPrice(async () => {
+      throw new ApiError('422', 'work_email_required')
+    })
+    click(/Save quote/)
+    click('Email my quote')
+    expect((await screen.findByRole('alert')).textContent).toBe('Please use your work email address.')
+  })
+
+  it('a saved quote reopens on the price screen as it was left, with what changed', async () => {
+    let plan: unknown = null
+    await toPrice(async o => ((plan = o.page), saved('RRE-0046', 'quote')))
+    click(/Save quote/)
+    click('Email my quote')
+    await screen.findByText(/Quote RRE-0046 is saved/)
+    cleanup()
+    const quote: SavedQuote = { number: 'RRE-0047', status: 'quoted', monthlyTotal: 1000, currentTotal: 1200, validUntil: '2026-12-13', expired: false, replaced: true, payload: { page: plan } }
+    render(<App loadManagers={loadManagers} tools quoteToken="tok" loadQuote={async t => (t === 'tok' ? quote : null)} />)
+    await screen.findByText(/This quote was replaced\. This is your latest plan, RRE-0047\./)
+    expect(screen.getByRole('heading').textContent).toBe('$1,000 / month')
+    expect(screen.getByText(/Pricing has changed since this quote: it was \$1,000 a month and is \$1,200 today\./)).toBeTruthy()
+  })
+
+  it('a link that is not ours says so and starts a new plan', async () => {
+    render(<App loadManagers={loadManagers} tools quoteToken="bad" loadQuote={async () => null} />)
+    await screen.findByText(/We couldn’t open that quote/)
+    expect(stage().getByRole('button', { name: /Owner/ })).toBeTruthy()
   })
 })
